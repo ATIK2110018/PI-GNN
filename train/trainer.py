@@ -300,12 +300,21 @@ class PINNTrainer:
         print(f"{'='*60}\n")
 
         t0 = time.time()
+        t_epoch = time.time()
         val_loss = 0.0
         for epoch in range(1, cfg.epochs + 1):
 #             if device.type == "cuda":
 #                 torch.cuda.empty_cache()
 
+            dt_epoch = time.time() - t_epoch
+            if epoch % max(1, cfg.log_every) == 0 or epoch == 1:
+                if epoch > 1:
+                    print(f"[{epoch:5d}/{cfg.epochs}] (last epoch: {dt_epoch:.0f}s)", flush=True)
+                else:
+                    print(f"[{epoch:5d}/{cfg.epochs}] Starting...", flush=True)
+
             model.train()
+            t_epoch = time.time()
             opt.zero_grad()
             
             accum_steps = getattr(cfg, "accumulation_steps", 1)
@@ -427,7 +436,8 @@ class PINNTrainer:
             f"Smooth={losses['smooth'].item():.3e}"
             f"{btc_str}  "
             f"n: {n_pred.mean().item():.4f}±{n_pred.std().item():.4f}  "
-            f"({elapsed:.0f}s)"
+            f"({elapsed:.0f}s)",
+            flush=True
         )
 
     def _save(self, epoch: int, n_pred: Tensor) -> None:
