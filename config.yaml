@@ -46,7 +46,7 @@ training:
   epochs: 2000
   batch_time_steps: 1         # Reduced from 2 — 2 time steps × 225k nodes OOMs T4 15GB during backward
   accumulation_steps: 4
-  log_every: 1
+  log_every: 10
   checkpoint_dir: "runs/pignn"
   device: "cuda"              # 'cuda' or 'cpu'
   seed: 42
