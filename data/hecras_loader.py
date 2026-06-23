@@ -441,7 +441,10 @@ def load_boundary_driven_results(
 
     h_min_phys = 0.05   # minimum physical depth (m)
 
+    log_every = max(T // 10, 1)
     for ti in range(T):
+        if ti % log_every == 0:
+            print(f"[Data] Boundary-driven fields: {ti}/{T} time steps", flush=True)
         Q     = float(Q_series[ti]) if not np.isnan(Q_series[ti]) else float(np.nanmean(Q_series))
         wse_d = float(H_down[ti])   if not np.isnan(H_down[ti])   else float(z_south + 2.0)
 

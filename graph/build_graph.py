@@ -63,10 +63,10 @@ def load_hecras_geometry(
     with h5py.File(hdf_path, "r") as f:
         # Detect format
         if "Geometry/2D Flow Areas/Mesh" in f:
-            print("[Graph] Detected: Format B (RAS Mapper mesh)")
+            print("[Graph] Detected: Format B (RAS Mapper mesh)", flush=True)
             geo = _load_format_b(f, hdf_path)
         else:
-            print("[Graph] Detected: Format A (classic exported mesh)")
+            print("[Graph] Detected: Format A (classic exported mesh)", flush=True)
             geo = _load_format_a(f, hdf_path, area_name)
 
     N = geo["N"]
@@ -90,7 +90,7 @@ def build_pyg_graph(geo: dict, bathy_tif: str | None = None, lulc_tif: str | Non
     fci = face_cell_idx[interior]
     fn  = face_normal[interior]
     fl  = face_length[interior]
-    print(f"[Graph] Interior faces: {fci.shape[0]}")
+    print(f"[Graph] Interior faces: {fci.shape[0]}", flush=True)
 
     # ── Normalise coordinates ──────────────────────────────────────────────
     x_off, y_off = cell_xy[:, 0].min(), cell_xy[:, 1].min()
@@ -166,13 +166,13 @@ def build_pyg_graph(geo: dict, bathy_tif: str | None = None, lulc_tif: str | Non
             cell_lulc = _sample_lulc_tif(lulc_tif, cell_xy)
             data.lulc = torch.from_numpy(cell_lulc.astype(np.int64))
             unique, counts = np.unique(cell_lulc, return_counts=True)
-            print(f"[Graph] LULC from raster: {lulc_tif}")
-            print(f"[Graph] LULC classes found: { {int(u): int(c) for u, c in zip(unique[:8], counts[:8])} }")
+            print(f"[Graph] LULC from raster: {lulc_tif}", flush=True)
+            print(f"[Graph] LULC classes found: { {int(u): int(c) for u, c in zip(unique[:8], counts[:8])} }", flush=True)
         except Exception as e:
             print(f"[Graph] Warning: raster LULC failed ({e})")
 
     print(f"[Graph] PyG Data: nodes={N}  edges={edge_index.shape[1]}  "
-          f"node_dim={node_feats.shape[1]}  edge_dim={edge_attr.shape[1]}")
+          f"node_dim={node_feats.shape[1]}  edge_dim={edge_attr.shape[1]}", flush=True)
     return data
 
 
@@ -194,13 +194,13 @@ def _load_format_b(f, hdf_path: str) -> dict:
     # Cell centres
     cell_xy = np.asarray(mesh["Cell Coordinates"][:], dtype=np.float64)[:, :2]
     N       = cell_xy.shape[0]
-    print(f"[Graph] Cells: {N}")
+    print(f"[Graph] Cells: {N}", flush=True)
 
     # Bed elevation
     try:
         cell_z = np.asarray(
             mesh["Property Tables/Cell Minimum Elevation"][:], dtype=np.float64).ravel()
-        print(f"[Graph] Cell elevation loaded: min={cell_z.min():.2f}  max={cell_z.max():.2f}")
+        print(f"[Graph] Cell elevation loaded: min={cell_z.min():.2f}  max={cell_z.max():.2f}", flush=True)
     except KeyError:
         cell_z = np.zeros(N, dtype=np.float64)
         print("[Graph] Warning: Cell Minimum Elevation not found; using zeros.")
@@ -404,45 +404,51 @@ def _sample_bathy_tif(tif_path: str, cell_xy: np.ndarray) -> np.ndarray:
 
 def _sample_lulc_tif(tif_path: str, cell_xy: np.ndarray) -> np.ndarray:
     """
-    Sample a LULC GeoTIFF at cell centroid coordinates.
+    Sample a LULC GeoTIFF at cell centroid coordinates (fully vectorized).
     Automatically reprojects UTM → WGS84 if the raster CRS is geographic.
-    Falls back to zero (Unclassified) for cells outside the raster extent.
+    Uses numpy array indexing instead of Python loops — handles 225k cells instantly.
     """
     import rasterio
+    from rasterio.transform import rowcol
+
     with rasterio.open(tif_path) as src:
         raster_crs = src.crs
-        coords = cell_xy.copy()  # [N, 2] in mesh native CRS (UTM)
+        xs = cell_xy[:, 0].copy()
+        ys = cell_xy[:, 1].copy()
 
-        # If raster is geographic (lat/lon) but mesh is projected (UTM), reproject
+        # ── Reproject UTM → WGS84 if raster is geographic ─────────────────
         if raster_crs and raster_crs.is_geographic:
-            try:
-                from pyproj import Transformer
-                # Detect UTM zone from x coordinate range (Sacramento ≈ UTM 10N)
-                # Use a general approach: try to infer EPSG from the coordinate range
-                x_mean = cell_xy[:, 0].mean()
-                y_mean = cell_xy[:, 1].mean()
-                # Sacramento River UTM Zone 10N = EPSG:26910
-                # Detect by coordinate magnitude: UTM x is 100k-900k, y is 0-10M
-                if 100_000 < x_mean < 900_000 and 1_000_000 < y_mean < 10_000_000:
-                    src_epsg = 26910  # UTM Zone 10N (Sacramento)
+            x_mean = xs.mean()
+            y_mean = ys.mean()
+            if 100_000 < x_mean < 900_000 and 1_000_000 < y_mean < 10_000_000:
+                try:
+                    from pyproj import Transformer
                     transformer = Transformer.from_crs(
-                        f"EPSG:{src_epsg}", raster_crs.to_epsg(),
-                        always_xy=True
+                        "EPSG:26910", raster_crs.to_epsg(), always_xy=True
                     )
-                    lon, lat = transformer.transform(cell_xy[:, 0], cell_xy[:, 1])
-                    coords = np.stack([lon, lat], axis=1)
-                    print(f"[Graph] LULC: Reprojected {cell_xy.shape[0]} cells from UTM Zone 10N → WGS84")
-            except Exception as e:
-                print(f"[Graph] LULC: CRS reprojection failed ({e}), sampling raw coords")
+                    xs, ys = transformer.transform(xs, ys)  # vectorized, instant
+                    print(f"[Graph] LULC: Reprojected {len(xs)} cells UTM Zone 10N → WGS84")
+                except Exception as e:
+                    print(f"[Graph] LULC: Reprojection failed ({e})")
 
-        # Sample raster at (possibly reprojected) coordinates
-        sample_coords = list(zip(coords[:, 0], coords[:, 1]))
-        sampled = np.array([v[0] for v in src.sample(sample_coords, indexes=1)], dtype=np.int64)
+        # ── Vectorized pixel lookup (no Python loop) ───────────────────────
+        rows, cols = rowcol(src.transform, xs, ys)
+        rows = np.asarray(rows, dtype=np.int64)
+        cols = np.asarray(cols, dtype=np.int64)
 
-        # Replace nodata / out-of-bounds zeros with 82 (Cultivated Crops) as safe default
-        out_of_bounds = (sampled == 0)
-        if out_of_bounds.any():
-            sampled[out_of_bounds] = 82
-            print(f"[Graph] LULC: {out_of_bounds.sum()} cells outside raster extent → defaulting to class 82 (Crops)")
+        H, W = src.height, src.width
+        band = src.read(1)   # read entire band once into memory — fast
+
+        # Clamp out-of-bounds indices and mark them
+        in_bounds = (rows >= 0) & (rows < H) & (cols >= 0) & (cols < W)
+        rows_safe = np.clip(rows, 0, H - 1)
+        cols_safe = np.clip(cols, 0, W - 1)
+
+        sampled = band[rows_safe, cols_safe].astype(np.int64)
+        sampled[~in_bounds] = 82   # default: Cultivated Crops for out-of-bounds
+
+        n_oob = (~in_bounds).sum()
+        if n_oob:
+            print(f"[Graph] LULC: {n_oob} cells outside raster extent → class 82 (Crops)")
 
     return sampled

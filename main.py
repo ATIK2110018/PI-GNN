@@ -57,7 +57,7 @@ def main(args: argparse.Namespace) -> None:
 
     use_cuda = torch.cuda.is_available() and cfg["training"]["device"] == "cuda"
     device   = torch.device("cuda" if use_cuda else "cpu")
-    print(f"\n[Main] Device: {device}")
+    print(f"\n[Main] Device: {device}", flush=True)
 
     # Memory Check & Safety Safeguard
     if use_cuda:
@@ -65,15 +65,15 @@ def main(args: argparse.Namespace) -> None:
             free_vram, total_vram = torch.cuda.mem_get_info()
             free_gb = free_vram / (1024 ** 3)
             total_gb = total_vram / (1024 ** 3)
-            print(f"[Main] GPU VRAM: Free = {free_gb:.2f} GB, Total = {total_gb:.2f} GB")
+            print(f"[Main] GPU VRAM: Free = {free_gb:.2f} GB, Total = {total_gb:.2f} GB", flush=True)
             if free_gb < 2.0:
-                print(f"[Main] WARNING: Low free VRAM ({free_gb:.2f} GB < 2.0 GB). Training might OOM.")
+                print(f"[Main] WARNING: Low free VRAM ({free_gb:.2f} GB < 2.0 GB). Training might OOM.", flush=True)
             
             # Print safety check warning for large meshes on low VRAM
             if cfg.get("geometry", {}).get("max_cells") is None and free_gb < 3.0:
-                print(f"[Main] WARNING: Free VRAM ({free_gb:.2f} GB) is less than 3 GB. Full-scale training on the entire HEC-RAS mesh might run out of memory.")
+                print(f"[Main] WARNING: Free VRAM ({free_gb:.2f} GB) is less than 3 GB. Full-scale training on the entire HEC-RAS mesh might run out of memory.", flush=True)
         except Exception as e:
-            print(f"[Main] Note: Could not query GPU memory info: {e}")
+            print(f"[Main] Note: Could not query GPU memory info: {e}", flush=True)
 
     set_seed(cfg["training"]["seed"])
 
@@ -93,7 +93,7 @@ def main(args: argparse.Namespace) -> None:
         return
 
     # ── 3. Build graph from HEC-RAS geometry ─────────────────────────────
-    print("\n[Main] Building graph from HEC-RAS geometry …")
+    print("\n[Main] Building graph from HEC-RAS geometry …", flush=True)
     geo = load_hecras_geometry(
         hdf_path  = cfg["geometry"]["hdf_path"],
         area_name = cfg["geometry"].get("area_name"),
@@ -108,14 +108,14 @@ def main(args: argparse.Namespace) -> None:
 
     warnings = validate_graph(graph)
     if warnings:
-        print("[Main] ⚠  Graph warnings:")
+        print("[Main] ⚠  Graph warnings:", flush=True)
         for w in warnings:
-            print(f"       • {w}")
+            print(f"       • {w}", flush=True)
     else:
-        print("[Main] ✓ Graph validation passed.")
+        print("[Main] ✓ Graph validation passed.", flush=True)
 
     if args.no_train:
-        print("[Main] --no-train flag set. Exiting after graph construction.")
+        print("[Main] --no-train flag set. Exiting after graph construction.", flush=True)
         return
 
     # ── 4. Load simulation results & boundary conditions ──────────────────
@@ -139,7 +139,7 @@ def main(args: argparse.Namespace) -> None:
         snap_offset_n = obs_cfg.get("btc_snap_offset_northing_m", 0.0)
 
         if btc_csv and Path(btc_csv).exists() and btc_lat is not None and btc_lon is not None:
-            print(f"\n[Main] Loading Butte City observations from {btc_csv} ...")
+            print(f"\n[Main] Loading Butte City observations from {btc_csv} ...", flush=True)
             btc_wse_series = load_btc_stage(btc_csv)
             btc_cell_idx = snap_to_mesh(
                 lat               = btc_lat,
@@ -162,7 +162,7 @@ def main(args: argparse.Namespace) -> None:
                 )
 
     if boundary_cfg and not (results_hdf and Path(results_hdf).exists()):
-        print("\n[Main] Running in boundary-driven data assimilation mode (no HEC-RAS results).")
+        print("\n[Main] Running in boundary-driven data assimilation mode (no HEC-RAS results).", flush=True)
         # Load boundary conditions
         bc = load_boundary_conditions(
             discharge_csv = boundary_cfg["upstream_discharge_csv"],
