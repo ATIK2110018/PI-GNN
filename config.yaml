@@ -42,7 +42,7 @@ training:
   lr: 5.0e-4
   lr_decay_patience: 100
   lr_decay_factor: 0.5
-  epochs: 1000
+  epochs: 2000
   batch_time_steps: 2
   log_every: 10
   checkpoint_dir: "runs/pignn"
