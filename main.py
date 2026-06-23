@@ -32,6 +32,7 @@ from model.pignn        import PIGNN
 from train.trainer      import PINNTrainer, TrainConfig, set_seed
 from viz.visualize      import make_all_plots, plot_mesh_bc_obs
 
+print("[DIAG] All imports complete", flush=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Config loader
@@ -47,6 +48,7 @@ def load_config(path: str = "config.yaml") -> dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def main(args: argparse.Namespace) -> None:
+    print("[DIAG] main() started", flush=True)
 
     # ── 1. Configuration ──────────────────────────────────────────────────
     cfg = load_config(args.config or "config.yaml")
@@ -57,6 +59,7 @@ def main(args: argparse.Namespace) -> None:
 
     use_cuda = torch.cuda.is_available() and cfg["training"]["device"] == "cuda"
     device   = torch.device("cuda" if use_cuda else "cpu")
+    print("[DIAG] torch.cuda done", flush=True)
     print(f"\n[Main] Device: {device}", flush=True)
 
     # Memory Check & Safety Safeguard
