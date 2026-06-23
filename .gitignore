@@ -155,3 +155,6 @@ checkpoint/
 .gemini/
 antigravity/
 *.tar.gz
+data.tar
+*.tar
+*.zip
