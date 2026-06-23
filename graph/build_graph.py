@@ -163,9 +163,11 @@ def build_pyg_graph(geo: dict, bathy_tif: str | None = None, lulc_tif: str | Non
     # ── Optional raster LULC ───────────────────────────────────────────────
     if lulc_tif is not None:
         try:
-            cell_lulc = _sample_bathy_tif(lulc_tif, cell_xy)
+            cell_lulc = _sample_lulc_tif(lulc_tif, cell_xy)
             data.lulc = torch.from_numpy(cell_lulc.astype(np.int64))
+            unique, counts = np.unique(cell_lulc, return_counts=True)
             print(f"[Graph] LULC from raster: {lulc_tif}")
+            print(f"[Graph] LULC classes found: { {int(u): int(c) for u, c in zip(unique[:8], counts[:8])} }")
         except Exception as e:
             print(f"[Graph] Warning: raster LULC failed ({e})")
 
@@ -398,3 +400,49 @@ def _sample_bathy_tif(tif_path: str, cell_xy: np.ndarray) -> np.ndarray:
     if nodata is not None:
         result[result == nodata] = np.nan
     return result
+
+
+def _sample_lulc_tif(tif_path: str, cell_xy: np.ndarray) -> np.ndarray:
+    """
+    Sample a LULC GeoTIFF at cell centroid coordinates.
+    Automatically reprojects UTM → WGS84 if the raster CRS is geographic.
+    Falls back to zero (Unclassified) for cells outside the raster extent.
+    """
+    import rasterio
+    with rasterio.open(tif_path) as src:
+        raster_crs = src.crs
+        coords = cell_xy.copy()  # [N, 2] in mesh native CRS (UTM)
+
+        # If raster is geographic (lat/lon) but mesh is projected (UTM), reproject
+        if raster_crs and raster_crs.is_geographic:
+            try:
+                from pyproj import Transformer
+                # Detect UTM zone from x coordinate range (Sacramento ≈ UTM 10N)
+                # Use a general approach: try to infer EPSG from the coordinate range
+                x_mean = cell_xy[:, 0].mean()
+                y_mean = cell_xy[:, 1].mean()
+                # Sacramento River UTM Zone 10N = EPSG:26910
+                # Detect by coordinate magnitude: UTM x is 100k-900k, y is 0-10M
+                if 100_000 < x_mean < 900_000 and 1_000_000 < y_mean < 10_000_000:
+                    src_epsg = 26910  # UTM Zone 10N (Sacramento)
+                    transformer = Transformer.from_crs(
+                        f"EPSG:{src_epsg}", raster_crs.to_epsg(),
+                        always_xy=True
+                    )
+                    lon, lat = transformer.transform(cell_xy[:, 0], cell_xy[:, 1])
+                    coords = np.stack([lon, lat], axis=1)
+                    print(f"[Graph] LULC: Reprojected {cell_xy.shape[0]} cells from UTM Zone 10N → WGS84")
+            except Exception as e:
+                print(f"[Graph] LULC: CRS reprojection failed ({e}), sampling raw coords")
+
+        # Sample raster at (possibly reprojected) coordinates
+        sample_coords = list(zip(coords[:, 0], coords[:, 1]))
+        sampled = np.array([v[0] for v in src.sample(sample_coords, indexes=1)], dtype=np.int64)
+
+        # Replace nodata / out-of-bounds zeros with 82 (Cultivated Crops) as safe default
+        out_of_bounds = (sampled == 0)
+        if out_of_bounds.any():
+            sampled[out_of_bounds] = 82
+            print(f"[Graph] LULC: {out_of_bounds.sum()} cells outside raster extent → defaulting to class 82 (Crops)")
+
+    return sampled
