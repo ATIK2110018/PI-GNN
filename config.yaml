@@ -27,11 +27,11 @@ model:
   n_message_passing: 4        # number of GNN message passing layers
   n_heads: 4                  # attention heads (for GAT)
   dropout: 0.0
-  n_min: 0.020
-  n_max: 0.080
-  n_init: 0.035
+  n_min: 0.025                # Lowest literature value for clean main channel
+  n_max: 0.150                # Highest literature value for dense riparian floodplain
+  n_init: 0.045               # Midpoint for initialization
   architecture: "encoder_process_decode"   # or "gat"
-  use_checkpoint: false       # disabled since Kaggle has plenty of VRAM
+  use_checkpoint: true        # Required to fit 225k mesh on Kaggle 15GB GPU
 
 physics:
   g: 9.81
@@ -43,7 +43,7 @@ training:
   lr_decay_patience: 100
   lr_decay_factor: 0.5
   epochs: 1000
-  batch_time_steps: 24
+  batch_time_steps: 2
   log_every: 10
   checkpoint_dir: "runs/pignn"
   device: "cuda"              # 'cuda' or 'cpu'
