@@ -70,7 +70,19 @@ else:
     log("ERROR: Data not found!")
     sys.exit(1)
 
-# ── 5. Run ─────────────────────────────────────────────────────────────────
+# ── 5. Run (real-time output) ──────────────────────────────────────────────
 log("Starting training...\n" + "=" * 60)
 os.environ["PYTORCH_CUDA_ALLOC_CONF"] = "expandable_segments:True"
-os.system("python main.py")
+os.environ["PYTHONUNBUFFERED"] = "1"
+
+import subprocess
+proc = subprocess.Popen(
+    ["python", "main.py"],
+    stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+    bufsize=1, text=True
+)
+for line in proc.stdout:
+    print(line, end="", flush=True)
+proc.wait()
+if proc.returncode != 0:
+    log(f"ERROR: main.py exited with code {proc.returncode}")
