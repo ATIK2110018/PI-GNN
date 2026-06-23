@@ -11,7 +11,7 @@ geometry:
   results_hdf: null           # no simulation results — boundary-driven training
   bathy_tif: "data/hecras/sacramento_2/Terrains/Terrain.sacramento_bathy.tif"
   area_name: null             # auto-detect from HDF5
-  max_cells: null             # null = use all cells
+  max_cells: null           # null = use all cells
 
 data:
   discharge_csv: "data/ord_ferry_discharge_jan2026.csv"
@@ -23,7 +23,7 @@ data:
   t_end: 2678400.0            # 744 hours = 31 days (January 2026)
 
 model:
-  hidden_dim: 64
+  hidden_dim: 128
   n_message_passing: 4        # number of GNN message passing layers
   n_heads: 4                  # attention heads (for GAT)
   dropout: 0.0
@@ -31,7 +31,7 @@ model:
   n_max: 0.080
   n_init: 0.035
   architecture: "encoder_process_decode"   # or "gat"
-  use_checkpoint: true        # trade compute for VRAM to prevent OOM
+  use_checkpoint: false       # disabled since Kaggle has plenty of VRAM
 
 physics:
   g: 9.81
@@ -42,18 +42,19 @@ training:
   lr: 1.0e-3
   lr_decay_patience: 300
   lr_decay_factor: 0.5
-  epochs: 3000
-  batch_time_steps: 4
-  log_every: 100
+  epochs: 1000
+  batch_time_steps: 24
+  log_every: 10
   checkpoint_dir: "runs/pignn"
   device: "cuda"              # 'cuda' or 'cpu'
   seed: 42
   # Loss weights
-  w_fvm: 0.1                  # FVM physics residual (low early so obs dominates)
+  w_fvm: 5.0                  # FVM physics residual (low early so obs dominates)
   w_obs: 10.0                 # HEC-RAS observation loss (0 if results_hdf is null)
   w_smooth: 0.05              # Manning n spatial smoothness
   w_bound: 0.1                # n boundary penalty
   w_btc: 50.0                 # BTC stage observation loss (highest — our only real gauge)
+  w_z: 25.0                   # Penalize n negatively correlating with elevation (prevents equifinality)
 
 # ── Gauge observations ────────────────────────────────────────
 observations:
@@ -72,7 +73,7 @@ boundary:
   dt_hours: 1.0               # hourly time steps
 
 visualization:
-  dpi: 200
+  dpi: 300
   colormap_n: "RdYlGn_r"
   colormap_h: "Blues"
   colormap_vel: "plasma"
