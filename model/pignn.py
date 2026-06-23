@@ -141,7 +141,7 @@ class PIGNN(nn.Module):
             for _ in range(n_layers)
         ])
 
-        self.n_decoder = _mlp([hidden_dim, hidden_dim // 2, 1])
+        self.n_decoder = _mlp([hidden_dim + node_feat_dim, hidden_dim // 2, 1])
 
         if surrogate_mode:
             self.flow_decoder = _mlp([hidden_dim, hidden_dim // 2, 3])
@@ -183,7 +183,8 @@ class PIGNN(nn.Module):
         node_h, edge_h = self.encode(data, h, u, v)
         node_h = self.process(node_h, data.edge_index, edge_h)
 
-        n_raw = self.n_decoder(node_h).squeeze(-1)
+        decoder_in = torch.cat([node_h, data.x], dim=-1)
+        n_raw = self.n_decoder(decoder_in).squeeze(-1)
         n     = torch.sigmoid(n_raw) * (self.n_max - self.n_min) + self.n_min
         out   = {"n": n}
 

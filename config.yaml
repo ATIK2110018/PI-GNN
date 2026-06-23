@@ -39,8 +39,8 @@ physics:
   flux_scheme: "roe"          # 'roe' or 'lax_friedrichs'
 
 training:
-  lr: 1.0e-3
-  lr_decay_patience: 300
+  lr: 5.0e-4
+  lr_decay_patience: 100
   lr_decay_factor: 0.5
   epochs: 1000
   batch_time_steps: 24
@@ -49,12 +49,12 @@ training:
   device: "cuda"              # 'cuda' or 'cpu'
   seed: 42
   # Loss weights
-  w_fvm: 5.0                  # FVM physics residual (low early so obs dominates)
-  w_obs: 10.0                 # HEC-RAS observation loss (0 if results_hdf is null)
-  w_smooth: 0.05              # Manning n spatial smoothness
+  w_fvm: 5.0                  # FVM physics residual
+  w_obs: 10.0                 # HEC-RAS observation loss
+  w_smooth: 0.005             # Drastically reduced to allow spatial variance
   w_bound: 0.1                # n boundary penalty
-  w_btc: 50.0                 # BTC stage observation loss (highest — our only real gauge)
-  w_z: 25.0                   # Penalize n negatively correlating with elevation (prevents equifinality)
+  w_btc: 50.0                 # BTC stage observation loss
+  w_z: 50.0                   # Doubled to heavily force physical heterogeneity (deep channel = smooth, shallow = rough)
 
 # ── Gauge observations ────────────────────────────────────────
 observations:
