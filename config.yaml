@@ -31,7 +31,7 @@ model:
   n_min: 0.025                # Lowest literature value for clean main channel
   n_max: 0.150                # Highest literature value for dense riparian floodplain
   n_init: 0.045               # Midpoint for initialization
-  architecture: "encoder_process_decode"   # or "gat"
+  architecture: "edgeconv"   # Attention on 225k nodes × 700k edges OOMs; EdgeConv is memory-safe
   use_checkpoint: true        # Required to fit 225k mesh on Kaggle 15GB GPU
 
 physics:
@@ -44,8 +44,8 @@ training:
   lr_decay_patience: 100
   lr_decay_factor: 0.5
   epochs: 2000
-  batch_time_steps: 2
-  accumulation_steps: 4       # Simulates a batch size of 8 to stop erratic loss spikes without crashing VRAM
+  batch_time_steps: 1         # Reduced from 2 — 2 time steps × 225k nodes OOMs T4 15GB during backward
+  accumulation_steps: 4
   log_every: 1
   checkpoint_dir: "runs/pignn"
   device: "cuda"              # 'cuda' or 'cpu'
