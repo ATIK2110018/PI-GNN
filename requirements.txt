@@ -3,8 +3,6 @@
 # GPU: NVIDIA GeForce RTX 2050 | CUDA 12.1 | PyTorch 2.5.1+cu121
 torch>=2.5.1          # installed: 2.5.1+cu121
 torch-geometric>=2.8  # installed: 2.8.0
-torch-scatter         # required by torch-geometric
-torch-sparse          # required by torch-geometric
 
 # ── Scientific computing ──────────────────────────────────────
 numpy>=1.24

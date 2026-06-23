@@ -46,6 +46,7 @@ class TrainConfig:
     w_smooth: float = 0.05
     w_bound:  float = 0.1
     w_btc:    float = 50.0   # BTC sparse gauge observation loss (high — only real obs)
+    w_z:      float = 10.0   # Elevation correlation penalty
     # Physics
     flux_scheme: str   = "lax_friedrichs"
     h_min:       float = 1e-3
@@ -149,6 +150,18 @@ class PINNTrainer:
                 self.z_btc = 0.0
                 warnings.warn("[Trainer] graph.cell_z not found — z_btc set to 0.0.")
 
+        # Precompute bed slopes to save redundant computations on the GPU
+        from physics.fvm_residual import _green_gauss_slope
+        self.dz_dx, self.dz_dy = _green_gauss_slope(
+            self.graph.cell_z,
+            self.graph.face_cell_idx,
+            self.graph.face_normal,
+            self.graph.face_length,
+            self.graph.cell_area,
+            self.N,
+            self.device
+        )
+
         self.rng = np.random.default_rng(cfg.seed)
         self.history: dict[str, list] = {
             k: [] for k in ["total", "fvm", "obs", "smooth", "bound", "btc",
@@ -203,6 +216,8 @@ class PINNTrainer:
             dt          = self.dt,
             flux_scheme = self.cfg.flux_scheme,
             h_min       = self.cfg.h_min,
+            dz_dx       = self.dz_dx,
+            dz_dy       = self.dz_dy,
         )
 
         # ── BTC gauge observation at time step t+1 ────────────────────────
@@ -235,14 +250,16 @@ class PINNTrainer:
             h_pred_btc  = h_pred_btc,
             z_btc       = self.z_btc,
             btc_wse_obs = btc_wse_obs,
+            z           = self.graph.cell_z,
+            w_z         = getattr(self.cfg, 'w_z', 10.0),
         )
 
     # ── Main training loop ─────────────────────────────────────────────────
 
     def evaluate_validation_loss(self) -> float:
-        """Evaluate loss on the fixed validation window (first 10 steps, 0 NaNs)."""
+        """Evaluate loss on the fixed validation window (first 2 steps, 0 NaNs)."""
         self.model.eval()
-        val_indices = list(range(0, min(10, self.T - 1)))
+        val_indices = list(range(0, min(2, self.T - 1)))
         val_agg: dict[str, float] = {}
         with torch.no_grad():
             for t_idx in val_indices:
@@ -282,9 +299,10 @@ class PINNTrainer:
         print(f"{'='*60}\n")
 
         t0 = time.time()
+        val_loss = 0.0
         for epoch in range(1, cfg.epochs + 1):
-            if device.type == "cuda":
-                torch.cuda.empty_cache()
+#             if device.type == "cuda":
+#                 torch.cuda.empty_cache()
 
             model.train()
             time_batch = self._time_batch()
@@ -337,7 +355,8 @@ class PINNTrainer:
             scaler.update()
 
             # Evaluate validation loss
-            val_loss = self.evaluate_validation_loss()
+            if epoch == 1 or epoch % 10 == 0 or epoch == cfg.epochs:
+                val_loss = self.evaluate_validation_loss()
             sched.step(val_loss)
 
             self._record(agg, n_pred, val_loss)

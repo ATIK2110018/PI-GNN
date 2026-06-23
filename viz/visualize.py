@@ -208,14 +208,26 @@ def plot_mesh_bc_obs(
 ) -> None:
     """Plot mesh overview plus a local inset around the snapped observation cell."""
     cell_xy = graph.pos.cpu().numpy()
-    step = max(1, len(cell_xy) // 35000)
-
+    from matplotlib.collections import LineCollection
+    import numpy as np
+    
     fig, ax = plt.subplots(figsize=(8, 12), dpi=dpi)
-    ax.scatter(
-        cell_xy[::step, 0],
-        cell_xy[::step, 1],
-        s=0.12, color="0.82", alpha=0.28, rasterized=True,
-    )
+    
+    # Extract face lines if available, otherwise fallback to dual graph edges
+    if hasattr(graph, "face_lines") and graph.face_lines is not None:
+        segments = graph.face_lines.cpu().numpy()
+    else:
+        src, dst = graph.edge_index.cpu().numpy()
+        mask = src < dst
+        src, dst = src[mask], dst[mask]
+        p1 = cell_xy[src]
+        p2 = cell_xy[dst]
+        segments = np.stack([p1, p2], axis=1)
+    
+    # Plot true mesh as a LineCollection
+    lc = LineCollection(segments, colors="0.65", linewidths=0.15, alpha=0.5, rasterized=True)
+    ax.add_collection(lc)
+    ax.autoscale()
 
     if obs_points and "BTC" in obs_points:
         x_btc, y_btc = obs_points["BTC"]
@@ -867,13 +879,30 @@ def make_all_plots(
 
     # Determine flow series to plot (predict via GNN if surrogate_mode is True)
     if getattr(model, "surrogate_mode", False):
-        print("[Viz] surrogate_mode is True → generating predicted flow fields over the entire time series for visualization …")
-        h_pred_list = []
-        u_pred_list = []
-        v_pred_list = []
+        print("[Viz] surrogate_mode is True → generating predicted flow fields selectively to optimize speed and memory …")
+        # Identify peak-flow time step
+        if bc_discharge is not None and not np.all(np.isnan(bc_discharge)):
+            peak_idx = int(np.nanargmax(bc_discharge))
+        else:
+            peak_idx = T // 2
+
+        # Key steps we want full spatial fields for (snapshots + peak velocity)
+        save_steps = {0, T // 4, T // 2, 3 * T // 4, T - 1, peak_idx}
+
+        # Stride for BTC gauge (predict BTC WSE every 4th step for plotting speed)
+        stride = 4
+        run_steps = sorted(list(save_steps.union(set(range(0, T, stride)))))
+
+        full_h = {}
+        full_u = {}
+        full_v = {}
+
+        btc_h_list = []
+        btc_t_list = []
+
         model.eval()
         with torch.no_grad():
-            for ti in range(T):
+            for ti in run_steps:
                 h_in = results["h_series"][ti]
                 u_in = results["u_series"][ti]
                 v_in = results["v_series"][ti]
@@ -882,18 +911,40 @@ def make_all_plots(
                     u_in = torch.from_numpy(u_in)
                     v_in = torch.from_numpy(v_in)
                 h_in = h_in.to(device); u_in = u_in.to(device); v_in = v_in.to(device)
-                
+
                 out = model(graph.to(device), h_in, u_in, v_in)
-                h_pred_list.append(out["h"].cpu().numpy())
-                u_pred_list.append(out["u"].cpu().numpy())
-                v_pred_list.append(out["v"].cpu().numpy())
-        h_plot = np.stack(h_pred_list, axis=0)
-        u_plot = np.stack(u_pred_list, axis=0)
-        v_plot = np.stack(v_pred_list, axis=0)
+                h_val = out["h"].cpu().numpy()
+                u_val = out["u"].cpu().numpy()
+                v_val = out["v"].cpu().numpy()
+
+                if ti in save_steps:
+                    full_h[ti] = h_val
+                    full_u[ti] = u_val
+                    full_v[ti] = v_val
+
+                if btc_cell_idx is not None:
+                    btc_h_list.append(float(h_val[btc_cell_idx]))
+                    btc_t_list.append(ti)
+
+        # Interpolate BTC water depths to all time steps
+        if btc_cell_idx is not None:
+            btc_h_all = np.interp(np.arange(T), btc_t_list, btc_h_list)
+            h_plot = btc_h_all[:, None]
+            plot_btc_idx = 0
+        else:
+            h_plot = np.zeros((T, 1), dtype=np.float32)
+            plot_btc_idx = 0
+
+        u_plot = None
+        v_plot = None
     else:
         h_plot = _np(results["h_series"])
         u_plot = _np(results["u_series"])
         v_plot = _np(results["v_series"])
+        full_h = h_plot
+        full_u = u_plot
+        full_v = v_plot
+        plot_btc_idx = btc_cell_idx
 
     # ── Flow snapshots at 5 time points ──────────────────────────────────
     for ti in [0, T // 4, T // 2, 3 * T // 4, T - 1]:
@@ -901,7 +952,7 @@ def make_all_plots(
             continue
         try:
             plot_flow_snapshot(
-                cell_xy, h_plot[ti], u_plot[ti], v_plot[ti],
+                cell_xy, full_h[ti], full_u[ti], full_v[ti],
                 float(t_arr[ti]),
                 save_path=str(run_dir / f"snapshot_t{ti:04d}.png"),
                 obs_points=obs_points,
@@ -916,7 +967,7 @@ def make_all_plots(
                 t_sec        = t_arr,
                 btc_wse_obs  = btc_wse_series,
                 h_series     = h_plot,
-                btc_cell_idx = btc_cell_idx,
+                btc_cell_idx = plot_btc_idx,
                 z_btc        = z_btc,
                 save_path    = str(run_dir / "btc_stage_comparison.png"),
             )
@@ -927,9 +978,9 @@ def make_all_plots(
     try:
         plot_velocity_field_snapshot(
             cell_xy       = cell_xy,
-            h_series      = h_plot,
-            u_series      = u_plot,
-            v_series      = v_plot,
+            h_series      = full_h,
+            u_series      = full_u,
+            v_series      = full_v,
             t_sec         = t_arr,
             discharge     = bc_discharge,
             save_path     = str(run_dir / "velocity_field_peak.png"),
@@ -1064,18 +1115,25 @@ def _plot_local_mesh_inset(
     nearby = dist <= radius_m
     nearby_idx = np.where(nearby)[0]
 
-    if hasattr(graph, "face_cell_idx"):
+    from matplotlib.collections import LineCollection
+    if hasattr(graph, "face_lines") and graph.face_lines is not None:
+        segments = graph.face_lines.cpu().numpy()
         fci = graph.face_cell_idx.cpu().numpy()
         keep = nearby[fci[:, 0]] & nearby[fci[:, 1]]
-        for c0, c1 in fci[keep]:
-            ax.plot(
-                [cell_xy_local[c0, 0], cell_xy_local[c1, 0]],
-                [cell_xy_local[c0, 1], cell_xy_local[c1, 1]],
-                color="0.55", linewidth=0.35, zorder=1,
-            )
+        segments = segments[keep]
+    else:
+        src, dst = graph.edge_index.cpu().numpy()
+        mask = (src < dst) & nearby[src] & nearby[dst]
+        src, dst = src[mask], dst[mask]
+        p1 = cell_xy_local[src]
+        p2 = cell_xy_local[dst]
+        segments = np.stack([p1, p2], axis=1)
+        
+    lc = LineCollection(segments, colors="0.55", linewidths=0.5, zorder=1)
+    ax.add_collection(lc)
 
     ax.scatter(cell_xy_local[nearby_idx, 0], cell_xy_local[nearby_idx, 1],
-               s=3, color="0.65", alpha=0.65, zorder=2)
+               s=5, color="0.45", alpha=0.8, zorder=2)
     ax.scatter(x_btc, y_btc, s=90, color="limegreen", edgecolor="black",
                linewidth=0.9, zorder=4)
     if btc_cell_idx is not None:

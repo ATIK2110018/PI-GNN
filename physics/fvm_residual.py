@@ -130,6 +130,8 @@ def swe_fvm_residuals(
     dt:            float,
     flux_scheme:   str   = "lax_friedrichs",
     h_min:         float = 1e-3,
+    dz_dx:         Tensor | None = None,
+    dz_dy:         Tensor | None = None,
 ) -> tuple[Tensor, Tensor, Tensor]:
     """
     Compute per-cell FVM SWE residuals (R_cont, R_momx, R_momy).
@@ -168,8 +170,9 @@ def swe_fvm_residuals(
     inv_area = 1.0 / cell_area.clamp(min=1.0)
 
     # Bed slope (Green-Gauss)
-    dz_dx, dz_dy = _green_gauss_slope(cell_z, face_cell_idx, face_normal, face_length,
-                                       cell_area, N, device)
+    if dz_dx is None or dz_dy is None:
+        dz_dx, dz_dy = _green_gauss_slope(cell_z, face_cell_idx, face_normal, face_length,
+                                           cell_area, N, device)
 
     # Manning friction  τ = g·n²·|v|·v / h^(4/3)
     h_safe = h_avg.clamp(min=h_min)

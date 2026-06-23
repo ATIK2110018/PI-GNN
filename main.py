@@ -239,6 +239,7 @@ def main(args: argparse.Namespace) -> None:
         w_smooth          = tcfg.get("w_smooth", 0.05),
         w_bound           = tcfg.get("w_bound", 0.1),
         w_btc             = tcfg.get("w_btc", 50.0),
+        w_z               = tcfg.get("w_z", 10.0),
         flux_scheme       = pcfg.get("flux_scheme", "lax_friedrichs"),
         h_min             = pcfg.get("h_min", 1e-3),
         seed              = tcfg.get("seed", 42),

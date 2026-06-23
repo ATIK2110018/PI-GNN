@@ -152,6 +152,8 @@ def build_pyg_graph(geo: dict, bathy_tif: str | None = None) -> Data:
     data.face_length   = torch.from_numpy(fl.astype(np.float32))
     data.face_normal   = torch.from_numpy(fn.astype(np.float32))
     data.face_cell_idx = torch.from_numpy(fci.astype(np.int64))
+    if "face_lines" in geo:
+        data.face_lines = torch.from_numpy(geo["face_lines"][interior].astype(np.float32))
     data.cell_area     = torch.from_numpy(area_approx.astype(np.float32))
     data.x_offset      = torch.tensor([x_off, y_off], dtype=torch.float32)
     data.x_scale       = torch.tensor([x_scale, y_scale], dtype=torch.float32)
@@ -248,6 +250,7 @@ def _load_format_b(f, hdf_path: str) -> dict:
         "face_cell_idx": face_cell_idx,
         "face_normal":   face_normal,
         "face_length":   face_length,
+        "face_lines":    np.stack([p0, p1], axis=1),
         "area_name":     area_name,
         "N":             N,
     }

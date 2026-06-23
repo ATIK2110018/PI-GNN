@@ -47,6 +47,30 @@ def bound_penalty(n_pred: Tensor, n_min: float, n_max: float) -> Tensor:
     return (below**2 + above**2).mean()
 
 
+def depth_correlation_loss(n_pred: Tensor, h: Tensor, target_std: float = 0.015) -> Tensor:
+    """
+    Penalize positive correlation between n and water depth.
+    We want higher n on floodplains (shallow h) and lower n in the channel (deep h).
+    Minimizing (1 + pearson_corr) enforces negative correlation.
+    Also applies a penalty if the standard deviation of n drops below target_std.
+    """
+    n_mean = n_pred.mean()
+    h_mean = h.mean()
+    cov = ((n_pred - n_mean) * (h - h_mean)).mean()
+    var_n = ((n_pred - n_mean)**2).mean().sqrt() + 1e-8
+    var_h = ((h - h_mean)**2).mean().sqrt() + 1e-8
+    pearson_corr = cov / (var_n * var_h)
+    
+    # We want pearson_corr to be negative (close to -1).
+    corr_loss = 1.0 + pearson_corr
+    
+    # Variance penalty: forces the n field to stretch out, preventing mode collapse
+    n_std = n_pred.std()
+    var_penalty = torch.relu(target_std - n_std)**2
+    
+    return corr_loss + var_penalty
+
+
 def btc_stage_loss(
     h_pred_btc: Tensor,
     z_btc: float,
@@ -91,6 +115,8 @@ def compute_total_loss(
     h_pred_btc:  Tensor | None = None,
     z_btc:       float | None  = None,
     btc_wse_obs: float | Tensor | None = None,
+    z:           Tensor | None = None,
+    w_z:         float = 0.0,
 ) -> dict[str, Tensor]:
     """
     Compute all loss terms and weighted total.
@@ -123,9 +149,15 @@ def compute_total_loss(
     else:
         losses["btc"] = torch.zeros(1, device=n_pred.device).squeeze()
 
+    if w_z > 0 and h_pred is not None:
+        losses["z_corr"] = depth_correlation_loss(n_pred, h_pred)
+    else:
+        losses["z_corr"] = torch.zeros(1, device=n_pred.device).squeeze()
+
     losses["total"] = (w_fvm    * losses["fvm"]
                        + w_obs    * losses["obs"]
                        + w_smooth * losses["smooth"]
                        + w_bound  * losses["bound"]
+                       + w_z      * losses["z_corr"]
                        + w_btc    * losses["btc"])
     return losses

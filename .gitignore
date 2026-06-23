@@ -154,3 +154,4 @@ checkpoint/
 .agents/
 .gemini/
 antigravity/
+*.tar.gz
