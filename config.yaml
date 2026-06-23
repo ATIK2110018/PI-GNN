@@ -46,7 +46,7 @@ training:
   epochs: 2000
   batch_time_steps: 2
   accumulation_steps: 4       # Simulates a batch size of 8 to stop erratic loss spikes without crashing VRAM
-  log_every: 10
+  log_every: 1
   checkpoint_dir: "runs/pignn"
   device: "cuda"              # 'cuda' or 'cpu'
   seed: 42
