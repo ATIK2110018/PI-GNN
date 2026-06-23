@@ -10,8 +10,9 @@ geometry:
   hdf_path: "data/hecras/sacramento_2/Geometries/Geometry.h5"
   results_hdf: null           # no simulation results — boundary-driven training
   bathy_tif: "data/hecras/sacramento_2/Terrains/Terrain.sacramento_bathy.tif"
+  lulc_tif:  "data/Sacramento_River_NLCD_LandCover.tif"   # USGS NLCD 2021 (30 m)
   area_name: null             # auto-detect from HDF5
-  max_cells: null           # null = use all cells
+  max_cells: null             # null = use all cells
 
 data:
   discharge_csv: "data/ord_ferry_discharge_jan2026.csv"

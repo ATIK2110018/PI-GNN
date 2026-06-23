@@ -99,7 +99,11 @@ def main(args: argparse.Namespace) -> None:
         area_name = cfg["geometry"].get("area_name"),
         max_cells = cfg["geometry"].get("max_cells"),
     )
-    graph = build_pyg_graph(geo, bathy_tif=cfg["geometry"].get("bathy_tif"))
+    graph = build_pyg_graph(
+        geo, 
+        bathy_tif=cfg["geometry"].get("bathy_tif"),
+        lulc_tif=cfg["geometry"].get("lulc_tif")
+    )
     print_graph_stats(graph)
 
     warnings = validate_graph(graph)

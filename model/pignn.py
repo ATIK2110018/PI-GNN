@@ -24,6 +24,31 @@ except ImportError:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# USGS NLCD 2021 → Manning's n Physical Prior Lookup Table
+# Source: Chow (1959), USACE HEC-RAS Hydraulic Reference Manual
+# ─────────────────────────────────────────────────────────────────────────────
+
+NLCD_N_PRIOR: dict[int, float] = {
+    11: 0.025,   # Open Water         — clean channel bed
+    12: 0.030,   # Perennial Ice/Snow — treated as low friction
+    21: 0.040,   # Developed, Open    — grass/light impervious
+    22: 0.055,   # Developed, Low     — scattered buildings
+    23: 0.070,   # Developed, Medium  — mixed impervious
+    24: 0.080,   # Developed, High    — dense urban
+    31: 0.030,   # Barren             — rock/sand/clay
+    41: 0.120,   # Deciduous Forest   — trees, leaf litter
+    42: 0.130,   # Evergreen Forest   — dense canopy
+    43: 0.110,   # Mixed Forest       — intermediate
+    52: 0.070,   # Shrub/Scrub        — low woody vegetation
+    71: 0.035,   # Herbaceous         — grasslands
+    81: 0.040,   # Hay/Pasture        — managed grass
+    82: 0.045,   # Cultivated Crops   — agricultural fields
+    90: 0.100,   # Woody Wetlands     — flooded forest
+    95: 0.060,   # Emergent Herbaceous Wetlands — marsh/reed
+}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Building blocks
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -118,20 +143,41 @@ class PIGNN(nn.Module):
         hidden_dim    : int   = 128,
         n_layers      : int   = 6,
         dropout       : float = 0.0,
-        n_min         : float = 0.020,
-        n_max         : float = 0.080,
+        n_min         : float = 0.025,
+        n_max         : float = 0.150,
         use_attention : bool  = True,
         surrogate_mode: bool  = False,
         use_checkpoint: bool  = True,
+        lulc_embed_dim: int   = 8,    # Size of the learned LULC embedding vector
     ):
         super().__init__()
         self.n_min          = n_min
         self.n_max          = n_max
         self.surrogate_mode = surrogate_mode
         self.use_checkpoint = use_checkpoint
+        self.lulc_embed_dim = lulc_embed_dim
 
-        in_node = node_feat_dim + flow_feat_dim
+        # ── LULC Embedding ────────────────────────────────────────────────
+        # Maps integer NLCD class ID (0-255) → learned vector of size lulc_embed_dim
+        self.lulc_embedding = nn.Embedding(
+            num_embeddings=256,
+            embedding_dim=lulc_embed_dim,
+            padding_idx=0
+        )
+        nn.init.uniform_(self.lulc_embedding.weight, -0.01, 0.01)
 
+        # ── Physical Prior Lookup ─────────────────────────────────────────
+        # Pre-build a fixed tensor: index=NLCD class → n_prior value
+        prior_table = torch.full((256,), fill_value=0.045, dtype=torch.float32)
+        for cls, n_val in NLCD_N_PRIOR.items():
+            prior_table[cls] = n_val
+        # Clamp to valid range
+        prior_table.clamp_(n_min, n_max)
+        self.register_buffer("n_prior_table", prior_table)  # saved in checkpoint
+
+        # ── Encoder / Processor ───────────────────────────────────────────
+        # Node encoder now also receives the LULC embedding
+        in_node = node_feat_dim + flow_feat_dim + lulc_embed_dim
         self.node_enc = _mlp([in_node, hidden_dim, hidden_dim], final_act=True)
         self.edge_enc = _mlp([edge_feat_dim, hidden_dim, hidden_dim], final_act=True)
 
@@ -141,7 +187,11 @@ class PIGNN(nn.Module):
             for _ in range(n_layers)
         ])
 
-        self.n_decoder = _mlp([hidden_dim + node_feat_dim, hidden_dim // 2, 1])
+        # ── Decoders ─────────────────────────────────────────────────────
+        # n_decoder now predicts a RESIDUAL (Δn) around the physical LULC prior.
+        # This forces spatial heterogeneity rather than letting the net start from scratch.
+        # Input: [latent ‖ raw_geometry ‖ lulc_embedding]
+        self.n_decoder = _mlp([hidden_dim + node_feat_dim + lulc_embed_dim, hidden_dim // 2, 1])
 
         if surrogate_mode:
             self.flow_decoder = _mlp([hidden_dim, hidden_dim // 2, 3])
@@ -155,12 +205,23 @@ class PIGNN(nn.Module):
         v_n = v.unsqueeze(-1) / (v.abs().max().clamp(min=1e-8))
         return torch.cat([h_n, u_n, v_n], dim=-1)
 
+    def _get_lulc_emb(self, data) -> Tensor:
+        """Return LULC embedding; falls back to zeros if data.lulc not available."""
+        if hasattr(data, "lulc") and data.lulc is not None:
+            ids = data.lulc.to(self.lulc_embedding.weight.device).clamp(0, 255)
+            return self.lulc_embedding(ids)           # [N, lulc_embed_dim]
+        return torch.zeros(
+            data.x.size(0), self.lulc_embed_dim,
+            device=data.x.device, dtype=data.x.dtype
+        )
+
     def encode(self, data, h: Tensor, u: Tensor, v: Tensor) -> tuple[Tensor, Tensor]:
         flow_feat = self._encode_flow(h, u, v)
-        node_in   = torch.cat([data.x, flow_feat], dim=-1)
+        lulc_emb  = self._get_lulc_emb(data)
+        node_in   = torch.cat([data.x, flow_feat, lulc_emb], dim=-1)  # [N, 4+3+8]
         node_h    = self.node_enc(node_in)
         edge_h    = self.edge_enc(data.edge_attr)
-        return node_h, edge_h
+        return node_h, edge_h, lulc_emb
 
     def process(self, node_h: Tensor, edge_index: Tensor, edge_h: Tensor) -> Tensor:
         if self.use_checkpoint and self.training:
@@ -180,13 +241,26 @@ class PIGNN(nn.Module):
             'n'           : Manning's n per cell [N]         (always)
             'h', 'u', 'v' : predicted flow fields [N]        (surrogate_mode only)
         """
-        node_h, edge_h = self.encode(data, h, u, v)
+        node_h, edge_h, lulc_emb = self.encode(data, h, u, v)
         node_h = self.process(node_h, data.edge_index, edge_h)
 
-        decoder_in = torch.cat([node_h, data.x], dim=-1)
-        n_raw = self.n_decoder(decoder_in).squeeze(-1)
-        n     = torch.sigmoid(n_raw) * (self.n_max - self.n_min) + self.n_min
-        out   = {"n": n}
+        # ── Residual Manning's n around Physical Prior ────────────────────
+        # The decoder predicts Δn (a small correction), NOT n directly.
+        # n = clamp(n_prior + tanh(Δn) * residual_scale)
+        decoder_in = torch.cat([node_h, data.x, lulc_emb], dim=-1)
+        delta_n_raw = self.n_decoder(decoder_in).squeeze(-1)   # unbounded scalar
+        delta_n     = torch.tanh(delta_n_raw) * 0.05           # max ±0.05 correction
+
+        # Get the physical prior for every cell from the LULC lookup table
+        if hasattr(data, "lulc") and data.lulc is not None:
+            ids     = data.lulc.to(self.n_prior_table.device).clamp(0, 255)
+            n_prior = self.n_prior_table[ids]                  # [N] physical baseline
+        else:
+            n_prior = torch.full((data.x.size(0),), 0.045,
+                                 device=data.x.device, dtype=data.x.dtype)
+
+        n = (n_prior + delta_n).clamp(self.n_min, self.n_max)  # [N]
+        out = {"n": n}
 
         if self.surrogate_mode:
             flow_raw = self.flow_decoder(node_h)

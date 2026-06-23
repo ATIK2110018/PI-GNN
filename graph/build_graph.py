@@ -76,7 +76,7 @@ def load_hecras_geometry(
     return geo
 
 
-def build_pyg_graph(geo: dict, bathy_tif: str | None = None) -> Data:
+def build_pyg_graph(geo: dict, bathy_tif: str | None = None, lulc_tif: str | None = None) -> Data:
     """Convert geometry dict to a PyG Data object."""
     cell_xy       = geo["cell_xy"]
     cell_z        = geo["cell_z"]
@@ -159,6 +159,15 @@ def build_pyg_graph(geo: dict, bathy_tif: str | None = None) -> Data:
     data.x_scale       = torch.tensor([x_scale, y_scale], dtype=torch.float32)
     data.z_stats       = torch.tensor([z_min, z_scale], dtype=torch.float32)
     data.num_nodes     = N
+
+    # ── Optional raster LULC ───────────────────────────────────────────────
+    if lulc_tif is not None:
+        try:
+            cell_lulc = _sample_bathy_tif(lulc_tif, cell_xy)
+            data.lulc = torch.from_numpy(cell_lulc.astype(np.int64))
+            print(f"[Graph] LULC from raster: {lulc_tif}")
+        except Exception as e:
+            print(f"[Graph] Warning: raster LULC failed ({e})")
 
     print(f"[Graph] PyG Data: nodes={N}  edges={edge_index.shape[1]}  "
           f"node_dim={node_feats.shape[1]}  edge_dim={edge_attr.shape[1]}")
