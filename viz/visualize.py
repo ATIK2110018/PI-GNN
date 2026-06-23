@@ -210,6 +210,8 @@ def plot_mesh_bc_obs(
     cell_xy = graph.pos.cpu().numpy()
     from matplotlib.collections import LineCollection
     import numpy as np
+
+    N = len(cell_xy)
     
     fig, ax = plt.subplots(figsize=(8, 12), dpi=dpi)
     
@@ -223,6 +225,13 @@ def plot_mesh_bc_obs(
         p1 = cell_xy[src]
         p2 = cell_xy[dst]
         segments = np.stack([p1, p2], axis=1)
+
+    # Subsample segments for large meshes (>50k nodes) to avoid matplotlib freeze
+    if N > 50000 and len(segments) > 50000:
+        rng = np.random.default_rng(0)
+        idx = rng.choice(len(segments), size=50000, replace=False)
+        segments = segments[idx]
+        print(f"[Viz] Mesh large ({N} nodes): subsampled to 50k faces for plotting")
     
     # Plot true mesh as a LineCollection
     lc = LineCollection(segments, colors="0.65", linewidths=0.15, alpha=0.5, rasterized=True)
