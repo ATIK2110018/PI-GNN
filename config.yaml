@@ -36,7 +36,7 @@ model:
 physics:
   g: 9.81
   h_min: 1.0e-3               # minimum depth for stability
-  flux_scheme: "roe"          # 'roe' or 'lax_friedrichs'
+  flux_scheme: "lax_friedrichs" # Switched from 'roe' to smooth numerical shocks and lower FVM residuals
 
 training:
   lr: 5.0e-4
@@ -44,6 +44,7 @@ training:
   lr_decay_factor: 0.5
   epochs: 2000
   batch_time_steps: 2
+  accumulation_steps: 4       # Simulates a batch size of 8 to stop erratic loss spikes without crashing VRAM
   log_every: 10
   checkpoint_dir: "runs/pignn"
   device: "cuda"              # 'cuda' or 'cpu'

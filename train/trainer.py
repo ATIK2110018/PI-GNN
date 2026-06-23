@@ -40,6 +40,7 @@ class TrainConfig:
     lr_decay_factor:   float = 0.5
     epochs:            int   = 3000
     batch_time_steps:  int   = 8
+    accumulation_steps:int   = 1
     # Loss weights
     w_fvm:    float = 1.0
     w_obs:    float = 10.0
@@ -305,54 +306,72 @@ class PINNTrainer:
 #                 torch.cuda.empty_cache()
 
             model.train()
-            time_batch = self._time_batch()
-
             opt.zero_grad()
-            agg: dict[str, Tensor] = {}
             
-            # If surrogate mode, run GNN pass at each time step in the batch
-            if getattr(model, "surrogate_mode", False):
-                with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
-                    for t_idx in time_batch:
-                        h_in = self.h_series[t_idx].detach().to(device)
-                        u_in = self.u_series[t_idx].detach().to(device)
-                        v_in = self.v_series[t_idx].detach().to(device)
-                        
-                        out = model(self.graph, h_in, u_in, v_in)
-                        n_pred = out["n"]
-                        h_pred = out["h"]
-                        u_pred = out["u"]
-                        v_pred = out["v"]
-                        
-                        sl = self._step_loss(t_idx, n_pred, h_pred, u_pred, v_pred)
-                        for k, v in sl.items():
-                            agg[k] = agg[k] + v if k in agg else v
-                    B   = len(time_batch)
-                    agg = {k: v / B for k, v in agg.items()}
-            else:
-                # Use midpoint time step as GNN context (h,u,v input)
-                mid    = time_batch[len(time_batch) // 2]
-                h_in   = self.h_series[mid].detach().to(device)
-                u_in   = self.u_series[mid].detach().to(device)
-                v_in   = self.v_series[mid].detach().to(device)
+            accum_steps = getattr(cfg, "accumulation_steps", 1)
+            agg_epoch: dict[str, Tensor] = {}
+            n_pred_epoch = None
+            
+            for step_i in range(accum_steps):
+                time_batch = self._time_batch()
+                agg_step: dict[str, Tensor] = {}
+                
+                # If surrogate mode, run GNN pass at each time step in the batch
+                if getattr(model, "surrogate_mode", False):
+                    with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
+                        for t_idx in time_batch:
+                            h_in = self.h_series[t_idx].detach().to(device)
+                            u_in = self.u_series[t_idx].detach().to(device)
+                            v_in = self.v_series[t_idx].detach().to(device)
+                            
+                            out = model(self.graph, h_in, u_in, v_in)
+                            n_pred = out["n"]
+                            h_pred = out["h"]
+                            u_pred = out["u"]
+                            v_pred = out["v"]
+                            
+                            sl = self._step_loss(t_idx, n_pred, h_pred, u_pred, v_pred)
+                            for k, v in sl.items():
+                                agg_step[k] = agg_step[k] + v if k in agg_step else v
+                        B   = len(time_batch)
+                        agg_step = {k: v / B for k, v in agg_step.items()}
+                else:
+                    # Use midpoint time step as GNN context (h,u,v input)
+                    mid    = time_batch[len(time_batch) // 2]
+                    h_in   = self.h_series[mid].detach().to(device)
+                    u_in   = self.u_series[mid].detach().to(device)
+                    v_in   = self.v_series[mid].detach().to(device)
 
-                with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
-                    out    = model(self.graph, h_in, u_in, v_in)
-                    n_pred = out["n"]   # [N]
+                    with torch.cuda.amp.autocast(enabled=(device.type == "cuda")):
+                        out    = model(self.graph, h_in, u_in, v_in)
+                        n_pred = out["n"]   # [N]
 
-                    # Accumulate losses over time batch
-                    for t_idx in time_batch:
-                        sl = self._step_loss(t_idx, n_pred)
-                        for k, v in sl.items():
-                            agg[k] = agg[k] + v if k in agg else v
-                    B   = len(time_batch)
-                    agg = {k: v / B for k, v in agg.items()}
+                        # Accumulate losses over time batch
+                        for t_idx in time_batch:
+                            sl = self._step_loss(t_idx, n_pred)
+                            for k, v in sl.items():
+                                agg_step[k] = agg_step[k] + v if k in agg_step else v
+                        B   = len(time_batch)
+                        agg_step = {k: v / B for k, v in agg_step.items()}
 
-            scaler.scale(agg["total"]).backward()
+                # Scale loss by accum_steps so learning rate doesn't explode
+                loss_scaled = agg_step["total"] / accum_steps
+                scaler.scale(loss_scaled).backward()
+                
+                # Save first n_pred for logging, and accumulate logs
+                if step_i == 0:
+                    n_pred_epoch = n_pred.detach()
+                for k, v in agg_step.items():
+                    agg_epoch[k] = agg_epoch.get(k, 0.0) + (v.detach() / accum_steps)
+
             scaler.unscale_(opt)
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             scaler.step(opt)
             scaler.update()
+
+            # Assign aggregated metrics back to local variables for downstream logging
+            agg = agg_epoch
+            n_pred = n_pred_epoch
 
             # Evaluate validation loss
             if epoch == 1 or epoch % 10 == 0 or epoch == cfg.epochs:
